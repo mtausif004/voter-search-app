@@ -1,104 +1,76 @@
 import streamlit as st
 import pandas as pd
-import pytesseract
 from pdf2image import convert_from_path
+import pytesseract
 import re
 import os
-import tempfile
+from datetime import datetime
+import database as db
 
-st.set_page_config(page_title="Voter Search System", layout="wide", page_icon="🗳️")
+st.set_page_config(page_title="Voter Pro", layout="wide")
+st.title("🗳️ Voter Pro - PDF OCR + Database + Search")
 
-st.title("🗳️ Voter Search System")
-st.subheader("PDF আপলোড করুন → OCR → সার্চ")
+# Sidebar
+st.sidebar.header("মেনু")
+page = st.sidebar.selectbox("পেজ সিলেক্ট করুন", ["PDF আপলোড & OCR", "লাইভ সার্চ", "ডাটাবেস দেখুন"])
 
-uploaded_files = st.file_uploader("PDF ফাইল আপলোড করুন", type="pdf", accept_multiple_files=True)
-
-if uploaded_files:
-    all_data = []
-    progress_bar = st.progress(0)
+if page == "PDF আপলোড & OCR":
+    uploaded_files = st.file_uploader("PDF আপলোড করুন", type="pdf", accept_multiple_files=True)
     
-    for file_idx, uploaded_file in enumerate(uploaded_files):
-        with st.spinner(f"OCR চলছে: {uploaded_file.name} (এটা সময় নেবে)"):
-            # টেম্পোরারি ফাইল
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(uploaded_file.getbuffer())
-                tmp_path = tmp.name
-            
-            try:
-                images = convert_from_path(tmp_path, dpi=250)
+    if uploaded_files and st.button("OCR চালিয়ে ডাটাবেসে সেভ করুন"):
+        for uploaded_file in uploaded_files:
+            with st.spinner(f"প্রসেস হচ্ছে: {uploaded_file.name}"):
+                # টেম্পোরারি সেভ
+                with open("temp.pdf", "wb") as f:
+                    f.write(uploaded_file.getbuffer())
                 
+                images = convert_from_path("temp.pdf", dpi=300)
                 full_text = ""
                 for img in images:
-                    text = pytesseract.image_to_string(img, lang='ben+eng')
+                    text = pytesseract.image_to_string(img, lang='ben')
                     full_text += text + "\n"
                 
-                # পার্সিং
+                # Parsing Logic (আরও উন্নত)
+                data = []
                 lines = full_text.split('\n')
-                current = {}
+                current = None
                 
                 for line in lines:
                     line = line.strip()
-                    if not line: continue
-                    
                     if re.search(r'০০\d{2}\.|^\d{4}\.', line) or "নাম:" in line:
-                        if current.get("নাম"):
-                            all_data.append(current)
-                        current = {
-                            "নাম": "", "ভোটার নং": "", "পিতা": "", "মাতা": "",
-                            "পেশা": "", "জন্ম তারিখ": "", "ঠিকানা": ""
-                        }
+                        if current and current.get("নাম"):
+                            data.append(current)
+                        current = {"serial": len(data)+1, "name": "", "voter_no": "", "father": "", 
+                                  "mother": "", "occupation": "", "dob": "", "address": ""}
                         
-                        name_m = re.search(r'নাম[:\s]+(.+?)(?=ভোটার|পিতা|$)', line)
-                        voter_m = re.search(r'ভোটার নং[:\s]*(\d+)', line)
-                        
-                        if name_m: current["নাম"] = name_m.group(1).strip()
-                        if voter_m: current["ভোটার নং"] = voter_m.group(1)
+                        name = re.search(r'নাম[:\s]+(.+?)(?=ভোটার|পিতা|$)', line)
+                        voter = re.search(r'ভোটার নং[:\s]*(\d+)', line)
+                        if name: current["name"] = name.group(1).strip()
+                        if voter: current["voter_no"] = voter.group(1)
                     
-                    elif "পিতা:" in line:
-                        current["পিতা"] = line.split(":", 1)[-1].strip()
-                    elif "মাতা:" in line:
-                        current["মাতা"] = line.split(":", 1)[-1].strip()
-                    elif "পশা:" in line or "পেশা:" in line:
-                        current["পেশা"] = line.split(":", 1)[-1].strip()
-                    elif "জন্ম তারিখ:" in line:
-                        current["জন্ম তারিখ"] = line.split(":", 1)[-1].strip()
-                    elif "ঠিকানা:" in line:
-                        current["ঠিকানা"] = line.split(":", 1)[-1].strip()
+                    elif "পিতা:" in line: current["father"] = line.split(":",1)[-1].strip()
+                    elif "মাতা:" in line: current["mother"] = line.split(":",1)[-1].strip()
+                    elif "পশা:" in line or "পেশা:" in line: current["occupation"] = line.split(":",1)[-1].strip()
+                    elif "জন্ম তারিখ:" in line: current["dob"] = line.split(":",1)[-1].strip()
+                    elif "ঠিকানা:" in line: current["address"] = line.split(":",1)[-1].strip()
                 
-                if current.get("নাম"):
-                    all_data.append(current)
-                    
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-        
-        progress_bar.progress((file_idx + 1) / len(uploaded_files))
-    
-    df = pd.DataFrame(all_data)
-    
-    if len(df) > 0:
-        st.success(f"✅ মোট {len(df)} জনের তথ্য বের হয়েছে")
-        
-        # সার্চ
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            name = st.text_input("নাম")
-        with col2:
-            voter = st.text_input("ভোটার নং")
-        with col3:
-            father = st.text_input("পিতার নাম")
-        
-        filtered = df.copy()
-        if name:
-            filtered = filtered[filtered["নাম"].astype(str).str.contains(name, case=False, na=False)]
-        if voter:
-            filtered = filtered[filtered["ভোটার নং"].astype(str).str.contains(voter, na=False)]
-        if father:
-            filtered = filtered[filtered["পিতা"].astype(str).str.contains(father, case=False, na=False)]
-        
-        st.dataframe(filtered, use_container_width=True)
-        
-        csv = df.to_csv(index=False, encoding='utf-8-sig')
-        st.download_button("📥 CSV ডাউনলোড", csv, "voter_list.csv", "text/csv")
-    else:
-        st.error("কোনো তথ্য বের করা যায়নি।")
+                if current and current.get("name"):
+                    data.append(current)
+                
+                df = pd.DataFrame(data)
+                db.save_to_db(df, uploaded_file.name)
+                st.success(f"{uploaded_file.name} → {len(df)} জন সেভ হয়েছে")
+                
+                os.remove("temp.pdf")
+
+elif page == "লাইভ সার্চ":
+    query = st.text_input("নাম / ভোটার নং / পিতা লিখুন")
+    if query:
+        result = db.search_voters(query)
+        st.dataframe(result, use_container_width=True)
+
+elif page == "ডাটাবেস দেখুন":
+    conn = sqlite3.connect('voters.db')
+    df = pd.read_sql_query("SELECT * FROM voters ORDER BY pdf_name, serial", conn)
+    st.dataframe(df, use_container_width=True)
+    conn.close()
