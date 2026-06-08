@@ -3,12 +3,12 @@ import pdfplumber
 import pandas as pd
 import re
 
-st.set_page_config(page_title="Voter Search System", layout="centered", page_icon="🗳️")
+st.set_page_config(page_title="Voter Search System", layout="wide", page_icon="🗳️")
 
 st.title("🗳️ Voter Search System")
-st.markdown("**মধ্য এওচিয়া — ভোটার তথ্য অনুসন্ধান**")
+st.subheader("বাংলাদেশ নির্বাচন কমিশন — যেকোনো এলাকার ভোটার লিস্ট")
 
-uploaded_files = st.file_uploader("PDF আপলোড করুন", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader("PDF আপলোড করুন (একাধিক)", type="pdf", accept_multiple_files=True)
 
 if uploaded_files:
     all_data = []
@@ -18,95 +18,105 @@ if uploaded_files:
         with st.spinner(f"প্রসেস হচ্ছে: {uploaded_file.name}"):
             with pdfplumber.open(uploaded_file) as pdf:
                 for page in pdf.pages:
-                    text = page.extract_text(x_tolerance=2, y_tolerance=2) or ""
-                    lines = [line.strip() for line in text.split('\n') if line.strip()]
+                    # ভালো টেক্সট এক্সট্রাকশন সেটিং
+                    text = page.extract_text(x_tolerance=3, y_tolerance=5, layout=True) or ""
+                    lines = [line.strip() for line in text.split('\n') if len(line.strip()) > 5]
                     
                     i = 0
                     while i < len(lines):
                         line = lines[i]
-                        # আরও ফ্লেক্সিবল ডিটেকশন
-                        if re.search(r'০০\d{2}\.', line) or "নাম:" in line or re.search(r'^\d{4}\.', line):
-                            try:
-                                # নাম বের করার চেষ্টা
-                                name_match = re.search(r'নাম[:\s]+(.+?)(?=ভোটার নং|পিতা|মাতা|$)', line)
-                                voter_match = re.search(r'ভোটার নং[:\s]*(\d+)', line)
+                        
+                        # ভোটার এন্ট্রি শুরু ডিটেক্ট
+                        if re.search(r'০০\d{2}\.|নাম:', line) or re.search(r'^\d{4}\.', line):
+                            entry = {
+                                "সিরিয়াল": len(all_data) + 1,
+                                "নাম": "",
+                                "ভোটার নং": "",
+                                "পিতা": "",
+                                "মাতা": "",
+                                "পেশা": "",
+                                "জন্ম তারিখ": "",
+                                "ঠিকানা": ""
+                            }
+                            
+                            # নাম ও ভোটার নং
+                            name_match = re.search(r'নাম[:\s]+(.+?)(?=ভোটার নং|পিতা|মাতা|পেশা|$)', line, re.DOTALL)
+                            voter_match = re.search(r'ভোটার নং[:\s]*(\d+)', line)
+                            
+                            if name_match:
+                                entry["নাম"] = name_match.group(1).strip()
+                            if voter_match:
+                                entry["ভোটার নং"] = voter_match.group(1)
+                            
+                            # পরবর্তী লাইন থেকে তথ্য সংগ্রহ
+                            i += 1
+                            buffer = ""
+                            while i < len(lines) and not re.search(r'০০\d{2}\.|^\d{4}\.', lines[i]):
+                                nl = lines[i]
+                                buffer += " " + nl
                                 
-                                father = mother = occ = dob = addr = ""
+                                if 'পিতা:' in nl:
+                                    entry["পিতা"] = re.split(r'পিতা[:\s]+', nl, 1)[-1].strip()
+                                elif 'মাতা:' in nl:
+                                    entry["মাতা"] = re.split(r'মাতা[:\s]+', nl, 1)[-1].strip()
+                                elif 'পশা:' in nl or 'পেশা:' in nl:
+                                    entry["পেশা"] = re.split(r'পশা[:\s]+|পেশা[:\s]+', nl, 1)[-1].strip()
+                                elif 'জন্ম তারিখ:' in nl or 'জন্ম তািরখ:' in nl:
+                                    entry["জন্ম তারিখ"] = re.split(r'জন্ম তারিখ[:\s]+', nl, 1)[-1].strip()
+                                elif 'ঠিকানা:' in nl:
+                                    entry["ঠিকানা"] = re.split(r'ঠিকানা[:\s]+', nl, 1)[-1].strip()
                                 i += 1
-                                while i < len(lines) and not re.search(r'০০\d{2}\.', lines[i]):
-                                    nl = lines[i]
-                                    if 'পিতা:' in nl or 'পিতা :' in nl:
-                                        father = re.split(r'পিতা[:\s]+', nl)[-1].strip()
-                                    elif 'মাতা:' in nl or 'মাতা :' in nl:
-                                        mother = re.split(r'মাতা[:\s]+', nl)[-1].strip()
-                                    elif 'পশা:' in nl or 'পেশা:' in nl:
-                                        occ = re.split(r'পশা[:\s]+|পেশা[:\s]+', nl)[-1].strip()
-                                    elif 'জন্ম তারিখ:' in nl:
-                                        dob = re.split(r'জন্ম তারিখ[:\s]+', nl)[-1].strip()
-                                    elif 'ঠিকানা:' in nl:
-                                        addr = re.split(r'ঠিকানা[:\s]+', nl)[-1].strip()
-                                    i += 1
-                                
-                                name = name_match.group(1).strip() if name_match else ""
-                                voter_no = voter_match.group(1) if voter_match else ""
-                                
-                                if name or voter_no:
-                                    all_data.append({
-                                        "নাম": name,
-                                        "ভোটার নং": voter_no,
-                                        "পিতা": father,
-                                        "মাতা": mother,
-                                        "পেশা": occ,
-                                        "জন্ম তারিখ": dob,
-                                        "ঠিকানা": addr
-                                    })
-                                continue
-                            except:
-                                pass
+                            
+                            # ঠিকানা যদি খালি থাকে তাহলে বাকি টেক্সট নাও
+                            if not entry["ঠিকানা"] and buffer:
+                                entry["ঠিকানা"] = buffer.strip()[:200]
+                            
+                            if entry["নাম"] or entry["ভোটার নং"]:
+                                all_data.append(entry)
+                            continue
                         i += 1
+                    
         progress_bar.progress((file_idx + 1) / len(uploaded_files))
     
     df = pd.DataFrame(all_data)
     
     if len(df) > 0:
-        st.success(f"✅ মোট {len(df)} জন ভোটার লোড হয়েছে")
+        st.success(f"✅ **{len(df)}** জন ভোটারের তথ্য সফলভাবে লোড হয়েছে")
         
-        # ছবির মতো সুন্দর UI
+        # সার্চ বক্স
+        st.markdown("### 🔍 অনুসন্ধান করুন")
         col1, col2 = st.columns(2)
         with col1:
             name_search = st.text_input("নাম")
+            father_search = st.text_input("পিতার নাম")
         with col2:
             voter_search = st.text_input("ভোটার নং")
         
-        father_search = st.text_input("পিতার নাম")
-        
         # ফিল্টার
         mask = pd.Series([True] * len(df))
-        if name_search:
-            mask &= df["নাম"].str.contains(name_search, case=False, na=False)
-        if voter_search:
-            mask &= df["ভোটার নং"].astype(str).str.contains(voter_search, na=False)
-        if father_search:
-            mask &= df["পিতা"].str.contains(father_search, case=False, na=False)
+        if name_search: mask &= df["নাম"].str.contains(name_search, case=False, na=False)
+        if voter_search: mask &= df["ভোটার নং"].astype(str).str.contains(voter_search, na=False)
+        if father_search: mask &= df["পিতা"].str.contains(father_search, case=False, na=False)
         
         filtered = df[mask].copy()
         
-        st.info(f"প্রদর্শিত: {len(filtered)} জন | মোট: {len(df)} জন")
+        st.info(f"**ফলাফল:** {len(filtered)} জন")
         
-        # কার্ড স্টাইল রেজাল্ট
+        # সুন্দর কার্ড
         for _, row in filtered.iterrows():
             st.markdown(f"""
-            <div style="background:white; padding:15px; border-radius:10px; margin:10px 0; box-shadow:0 2px 5px rgba(0,0,0,0.1);">
-                <b>নাম:</b> {row['নাম']}<br>
+            <div style="background:white; padding:20px; border-radius:12px; margin:12px 0; box-shadow:0 4px 15px rgba(0,0,0,0.1);">
+                <h4>{row['নাম']}</h4>
                 <b>ভোটার নং:</b> {row['ভোটার নং']}<br>
                 <b>পিতা:</b> {row['পিতা']}<br>
                 <b>মাতা:</b> {row['মাতা']}<br>
                 <b>পেশা:</b> {row['পেশা']}<br>
+                <b>জন্ম তারিখ:</b> {row['জন্ম তারিখ']}<br>
                 <b>ঠিকানা:</b> {row['ঠিকানা']}
             </div>
             """, unsafe_allow_html=True)
         
         csv = df.to_csv(index=False, encoding='utf-8-sig')
-        st.download_button("📥 সম্পূর্ণ তালিকা CSV ডাউনলোড করুন", csv, "full_voter_list.csv", "text/csv")
+        st.download_button("📥 সম্পূর্ণ লিস্ট CSV ডাউনলোড", csv, "voter_list.csv", "text/csv")
     else:
-        st.error("কোনো তথ্য বের করা যায়নি। PDF আবার চেষ্টা করুন বা আমাকে বলুন।")
+        st.warning("কোনো তথ্য পাওয়া যায়নি। অন্য PDF চেষ্টা করুন।")
